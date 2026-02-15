@@ -775,23 +775,74 @@ def ide_calibrate_regions() -> Dict[str, str]:
     from region_picker import pick_input_and_output
 
     inp, out = pick_input_and_output()
-    if not inp or not out:
-        return {"log": "Canceled.", "image_url": ""}
+    if not inp:
+        return {"log": "Canceled (input).", "image_url": ""}
 
     updates: Dict[str, str] = {
         "IDE_INPUT_REGION": inp.to_env(),
-        "IDE_OUTPUT_REGION": out.to_env(),
         "IDE_INPUT_POS": f"{inp.left + inp.width // 2},{inp.top + inp.height // 2}",
-        "IDE_OUTPUT_POS": f"{out.left + out.width // 2},{out.top + out.height // 2}",
     }
+    if out:
+        updates.update(
+            {
+                "IDE_OUTPUT_REGION": out.to_env(),
+                "IDE_OUTPUT_POS": f"{out.left + out.width // 2},{out.top + out.height // 2}",
+            }
+        )
     _upsert_env_vars(_DOTENV_PATH, updates)
 
     return {
         "log": (
             "Saved regions to agent/.env:\n"
             f"IDE_INPUT_REGION={updates['IDE_INPUT_REGION']}\n"
-            f"IDE_OUTPUT_REGION={updates['IDE_OUTPUT_REGION']}\n"
+            f"IDE_OUTPUT_REGION={updates.get('IDE_OUTPUT_REGION','(not set)')}\n"
             f"IDE_INPUT_POS={updates['IDE_INPUT_POS']}\n"
+            f"IDE_OUTPUT_POS={updates.get('IDE_OUTPUT_POS','(not set)')}\n"
+            "Restart agent to apply. If output was not set, run `/ide calibrate output`."
+        ),
+        "image_url": "",
+    }
+
+
+def ide_calibrate_input_region() -> Dict[str, str]:
+    from region_picker import pick_region
+
+    inp = pick_region("Select INPUT region", "#ef4444")  # red
+    if not inp:
+        return {"log": "Canceled (input).", "image_url": ""}
+
+    updates: Dict[str, str] = {
+        "IDE_INPUT_REGION": inp.to_env(),
+        "IDE_INPUT_POS": f"{inp.left + inp.width // 2},{inp.top + inp.height // 2}",
+    }
+    _upsert_env_vars(_DOTENV_PATH, updates)
+    return {
+        "log": (
+            "Saved input region to agent/.env:\n"
+            f"IDE_INPUT_REGION={updates['IDE_INPUT_REGION']}\n"
+            f"IDE_INPUT_POS={updates['IDE_INPUT_POS']}\n"
+            "Restart agent to apply."
+        ),
+        "image_url": "",
+    }
+
+
+def ide_calibrate_output_region() -> Dict[str, str]:
+    from region_picker import pick_region
+
+    out = pick_region("Select OUTPUT region", "#3b82f6")  # blue
+    if not out:
+        return {"log": "Canceled (output).", "image_url": ""}
+
+    updates: Dict[str, str] = {
+        "IDE_OUTPUT_REGION": out.to_env(),
+        "IDE_OUTPUT_POS": f"{out.left + out.width // 2},{out.top + out.height // 2}",
+    }
+    _upsert_env_vars(_DOTENV_PATH, updates)
+    return {
+        "log": (
+            "Saved output region to agent/.env:\n"
+            f"IDE_OUTPUT_REGION={updates['IDE_OUTPUT_REGION']}\n"
             f"IDE_OUTPUT_POS={updates['IDE_OUTPUT_POS']}\n"
             "Restart agent to apply."
         ),
@@ -956,6 +1007,16 @@ def handle_command(payload: Dict[str, Any]) -> None:
 
         if command_text == "/ide calibrate regions":
             result = ide_calibrate_regions()
+            update_command(command_id, "completed", response_log=result["log"])
+            return
+
+        if command_text == "/ide calibrate input":
+            result = ide_calibrate_input_region()
+            update_command(command_id, "completed", response_log=result["log"])
+            return
+
+        if command_text == "/ide calibrate output":
+            result = ide_calibrate_output_region()
             update_command(command_id, "completed", response_log=result["log"])
             return
 
