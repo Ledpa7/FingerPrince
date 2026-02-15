@@ -293,28 +293,57 @@ class RegionWindowPicker(tk.Tk):
         self.configure(bg=color)
         self.resizable(True, True)
         self.geometry("640x260+120+120")
-        # Prevent shrinking so much that the OK/Cancel bar becomes unreachable.
-        self.minsize(360, 140)
+        # Left tool panel width in px. We'll exclude this from the saved region.
+        self.panel_w = 92
+        # Allow the user to make the region small, but keep controls usable.
+        self.minsize(self.panel_w + 80, 110)
 
         self.result: Optional[Rect] = None
 
-        # Control bar
-        bar = tk.Frame(self, bg="#111827")
-        bar.pack(side="bottom", fill="x")
-        lbl = tk.Label(
-            bar,
-            text="Move/resize this window to cover the region, then click OK. (Esc = Cancel)",
-            fg="white",
+        # Layout: left tool panel + main colored area.
+        root = tk.Frame(self, bg=color)
+        root.pack(fill="both", expand=True)
+
+        panel = tk.Frame(root, bg="#111827", width=self.panel_w)
+        panel.pack(side="left", fill="y")
+        panel.pack_propagate(False)
+
+        def mk_btn(text: str, cmd) -> tk.Button:
+            b = tk.Button(
+                panel,
+                text=text,
+                command=cmd,
+                width=10,
+                height=2,
+                bg="#0f172a",
+                fg="white",
+                activebackground="#111827",
+                activeforeground="white",
+                relief="solid",
+                bd=1,
+            )
+            return b
+
+        mk_btn("OK", self._ok).pack(padx=10, pady=(12, 6), fill="x")
+        mk_btn("Cancel", self._cancel).pack(padx=10, pady=6, fill="x")
+        mk_btn("Reset", self._reset).pack(padx=10, pady=6, fill="x")
+
+        hint = tk.Label(
+            panel,
+            text="Enter=OK\nEsc=Cancel\n\nTool panel\nis excluded\nfrom region",
+            fg="#e5e7eb",
             bg="#111827",
-            anchor="w",
+            justify="left",
+            anchor="nw",
             padx=10,
-            pady=6,
+            pady=8,
+            font=("Segoe UI", 9),
         )
-        lbl.pack(side="left", fill="x", expand=True)
-        btn_cancel = tk.Button(bar, text="Cancel", command=self._cancel)
-        btn_cancel.pack(side="right", padx=6, pady=6)
-        btn_ok = tk.Button(bar, text="OK", command=self._ok)
-        btn_ok.pack(side="right", padx=6, pady=6)
+        hint.pack(side="bottom", fill="x")
+
+        # Main area: just shows the tinted region.
+        main = tk.Frame(root, bg=color)
+        main.pack(side="left", fill="both", expand=True)
 
         self.bind("<Escape>", lambda _e: self._cancel())
         # Keyboard fallback in case buttons are obscured by a tiny size or other windows.
@@ -330,18 +359,25 @@ class RegionWindowPicker(tk.Tk):
             pass
 
     def _ok(self) -> None:
-        # Use the outer window rectangle. A few px of titlebar/border offset is acceptable for our use.
+        # Use the outer window rectangle, but exclude the left tool panel.
+        # A few px of titlebar/border offset is acceptable for our use.
         self.update_idletasks()
         left = int(self.winfo_x())
         top = int(self.winfo_y())
         width = int(self.winfo_width())
         height = int(self.winfo_height())
-        self.result = Rect(left, top, width, height)
+        region_left = left + self.panel_w
+        region_width = max(40, width - self.panel_w)
+        self.result = Rect(region_left, top, region_width, height)
         self.quit()
 
     def _cancel(self) -> None:
         self.result = None
         self.quit()
+
+    def _reset(self) -> None:
+        # Reasonable default size/position.
+        self.geometry("640x260+120+120")
 
 
 def pick_region_window(title: str, color: str) -> Optional[Rect]:
