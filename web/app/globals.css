@@ -1,0 +1,34 @@
+﻿@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-top: #8ed9ff;
+  --bg-mid: #d9f3ff;
+  --bg-bottom: #f6fbff;
+  --panel: rgba(255, 255, 255, 0.85);
+  --ink: #14233c;
+  --muted: #647495;
+  --line: rgba(20, 35, 60, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 10% 8%, rgba(253, 232, 117, 0.9), transparent 28%),
+    radial-gradient(circle at 86% 14%, rgba(142, 217, 255, 0.85), transparent 32%),
+    linear-gradient(180deg, var(--bg-top) 0%, var(--bg-mid) 50%, var(--bg-bottom) 100%);
+}
+
+body {
+  font-family: "Pretendard", "Noto Sans KR", "Segoe UI", sans-serif;
+}
+

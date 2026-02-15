@@ -1,0 +1,22 @@
+# Secrets
+agent/.env
+web/.env.local
+
+# Python
+agent/.venv/
+agent/__pycache__/
+agent/*.pyc
+
+# User-specific IDE templates (learned on each machine)
+agent/assets/ide_input_template.png
+agent/assets/ide_output_template.png
+
+# Node / Next
+web/node_modules/
+web/.next/
+web/.vercel/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
