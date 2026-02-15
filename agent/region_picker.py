@@ -272,6 +272,84 @@ def pick_region(title: str, color: str) -> Optional[Rect]:
     return res
 
 
+class RegionWindowPicker(tk.Tk):
+    """
+    Fallback picker that uses a normal window instead of a fullscreen transparent overlay.
+
+    The user moves/resizes the window itself to cover the desired region, then presses OK.
+    This is much more reliable on Windows where transparent fullscreen overlays can be flaky
+    (focus issues, virtual desktops, GPU/driver quirks).
+    """
+
+    def __init__(self, title: str, color: str, alpha: float = 0.35) -> None:
+        super().__init__()
+        self.title(title)
+        self.attributes("-topmost", True)
+        try:
+            self.attributes("-alpha", alpha)
+        except Exception:
+            pass
+
+        self.configure(bg=color)
+        self.resizable(True, True)
+        self.geometry("640x260+120+120")
+
+        self.result: Optional[Rect] = None
+
+        # Control bar
+        bar = tk.Frame(self, bg="#111827")
+        bar.pack(side="bottom", fill="x")
+        lbl = tk.Label(
+            bar,
+            text="Move/resize this window to cover the region, then click OK. (Esc = Cancel)",
+            fg="white",
+            bg="#111827",
+            anchor="w",
+            padx=10,
+            pady=6,
+        )
+        lbl.pack(side="left", fill="x", expand=True)
+        btn_cancel = tk.Button(bar, text="Cancel", command=self._cancel)
+        btn_cancel.pack(side="right", padx=6, pady=6)
+        btn_ok = tk.Button(bar, text="OK", command=self._ok)
+        btn_ok.pack(side="right", padx=6, pady=6)
+
+        self.bind("<Escape>", lambda _e: self._cancel())
+
+        try:
+            self.update_idletasks()
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
+
+    def _ok(self) -> None:
+        # Use the outer window rectangle. A few px of titlebar/border offset is acceptable for our use.
+        self.update_idletasks()
+        left = int(self.winfo_x())
+        top = int(self.winfo_y())
+        width = int(self.winfo_width())
+        height = int(self.winfo_height())
+        self.result = Rect(left, top, width, height)
+        self.quit()
+
+    def _cancel(self) -> None:
+        self.result = None
+        self.quit()
+
+
+def pick_region_window(title: str, color: str) -> Optional[Rect]:
+    app = RegionWindowPicker(title=title, color=color)
+    app.mainloop()
+    res = app.result
+    try:
+        app.destroy()
+    except Exception:
+        pass
+    return res
+
+
 def pick_input_and_output() -> Tuple[Optional[Rect], Optional[Rect]]:
     inp = pick_region("Select INPUT region", "#ef4444")  # red
     if not inp:
@@ -325,21 +403,33 @@ def _save_regions_to_env(env_path: Path, inp: Optional[Rect], out: Optional[Rect
 def main() -> int:
     ap = argparse.ArgumentParser(description="ServerVibe region picker (writes IDE_*_REGION/POS into agent/.env)")
     ap.add_argument("--env", default=str((Path(__file__).resolve().parent / ".env").resolve()))
+    ap.add_argument(
+        "--mode",
+        choices=["overlay", "window"],
+        default="window",
+        help="Picker UI mode (default: window; overlay is fullscreen transparent).",
+    )
     ap.add_argument("--input", action="store_true", help="Pick only INPUT region (red)")
     ap.add_argument("--output", action="store_true", help="Pick only OUTPUT region (blue)")
     args = ap.parse_args()
 
     env_path = Path(args.env)
+    pick = pick_region if args.mode == "overlay" else pick_region_window
+
     if args.input and not args.output:
-        inp = pick_region("Select INPUT region", "#ef4444")
+        inp = pick("Select INPUT region", "#ef4444")
         _save_regions_to_env(env_path, inp, None)
         return 0
     if args.output and not args.input:
-        out = pick_region("Select OUTPUT region", "#3b82f6")
+        out = pick("Select OUTPUT region", "#3b82f6")
         _save_regions_to_env(env_path, None, out)
         return 0
 
-    inp, out = pick_input_and_output()
+    inp = pick("Select INPUT region", "#ef4444")
+    if not inp:
+        _save_regions_to_env(env_path, None, None)
+        return 0
+    out = pick("Select OUTPUT region", "#3b82f6")
     _save_regions_to_env(env_path, inp, out)
     return 0
 
