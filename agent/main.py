@@ -45,6 +45,8 @@ IDE_FOCUS_TRANSCRIPT_HOTKEY = os.getenv("IDE_FOCUS_TRANSCRIPT_HOTKEY", "").strip
 IDE_COPY_TRANSCRIPT_HOTKEY = os.getenv("IDE_COPY_TRANSCRIPT_HOTKEY", "").strip().lower()
 IDE_INPUT_IMAGE = os.getenv("IDE_INPUT_IMAGE", "").strip()
 IDE_OUTPUT_IMAGE = os.getenv("IDE_OUTPUT_IMAGE", "").strip()
+IDE_INPUT_REGION = os.getenv("IDE_INPUT_REGION", "").strip()  # "left,top,width,height"
+IDE_OUTPUT_REGION = os.getenv("IDE_OUTPUT_REGION", "").strip()  # "left,top,width,height"
 IDE_IMAGE_TIMEOUT_SEC = float(os.getenv("IDE_IMAGE_TIMEOUT_SEC", "4.0"))
 IDE_IMAGE_CONFIDENCE = float(os.getenv("IDE_IMAGE_CONFIDENCE", "0.85"))
 IDE_LEARN_TEMPLATE_W = int(os.getenv("IDE_LEARN_TEMPLATE_W", "320"))
@@ -242,6 +244,24 @@ def _parse_xy(spec: str) -> Optional[tuple[int, int]]:
         return None
 
 
+def _parse_region(spec: str) -> Optional[tuple[int, int, int, int]]:
+    """
+    Parse "left,top,width,height".
+    """
+    if not spec:
+        return None
+    parts = [p.strip() for p in spec.split(",")]
+    if len(parts) != 4:
+        return None
+    try:
+        left, top, w, h = (int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]))
+        if w <= 0 or h <= 0:
+            return None
+        return (left, top, w, h)
+    except Exception:
+        return None
+
+
 def _hotkey_from_spec(spec: str) -> Sequence[str]:
     # Example: "ctrl+l" -> ["ctrl", "l"], "ctrl+shift+p" -> ["ctrl","shift","p"]
     keys = [k.strip() for k in spec.split("+") if k.strip()]
@@ -354,6 +374,8 @@ def ide_chat_via_gui(question: str) -> Dict[str, Optional[str]]:
 
     input_xy = _parse_xy(IDE_INPUT_POS)
     output_xy = _parse_xy(IDE_OUTPUT_POS)
+    input_region = _parse_region(IDE_INPUT_REGION)
+    output_region = _parse_region(IDE_OUTPUT_REGION)
 
     wins = pygetwindow.getWindowsWithTitle(IDE_WINDOW_TITLE_SUBSTR)
     if not wins:
@@ -465,16 +487,21 @@ def ide_chat_via_gui(question: str) -> Dict[str, Optional[str]]:
         pyautogui.hotkey(*_hotkey_from_spec(IDE_CHAT_FOCUS_HOTKEY))
         time.sleep(0.05)
     else:
-        clicked = _click_by_image(pyautogui, IDE_INPUT_IMAGE, IDE_IMAGE_TIMEOUT_SEC)
-        if clicked:
-            time.sleep(0.05)
-        elif input_xy:
-            pyautogui.click(input_xy[0], input_xy[1])
+        if input_region:
+            l, t, w, h = input_region
+            pyautogui.click(l + w // 2, t + h // 2)
             time.sleep(0.05)
         else:
-            raise RuntimeError(
-                "No way to focus input. Set IDE_CHAT_FOCUS_HOTKEY or IDE_INPUT_IMAGE or IDE_INPUT_POS."
-            )
+            clicked = _click_by_image(pyautogui, IDE_INPUT_IMAGE, IDE_IMAGE_TIMEOUT_SEC)
+            if clicked:
+                time.sleep(0.05)
+            elif input_xy:
+                pyautogui.click(input_xy[0], input_xy[1])
+                time.sleep(0.05)
+            else:
+                raise RuntimeError(
+                    "No way to focus input. Set IDE_CHAT_FOCUS_HOTKEY or IDE_INPUT_REGION or IDE_INPUT_IMAGE or IDE_INPUT_POS."
+                )
 
     pyautogui.hotkey("ctrl", "v")
     time.sleep(0.05)
@@ -486,28 +513,47 @@ def ide_chat_via_gui(question: str) -> Dict[str, Optional[str]]:
     sentinel = f"__server_vibe_clip_sentinel_{time.time_ns()}__"
     pyperclip.copy(sentinel)
 
-    # Focus transcript: hotkey -> image -> coordinates.
+    # Focus transcript: hotkey -> region -> image -> coordinates.
     if IDE_FOCUS_TRANSCRIPT_HOTKEY:
         pyautogui.hotkey(*_hotkey_from_spec(IDE_FOCUS_TRANSCRIPT_HOTKEY))
         time.sleep(0.05)
     else:
-        clicked = _click_by_image(pyautogui, IDE_OUTPUT_IMAGE, IDE_IMAGE_TIMEOUT_SEC)
-        if clicked:
-            time.sleep(0.05)
-        elif output_xy:
-            pyautogui.click(output_xy[0], output_xy[1])
+        if output_region:
+            l, t, w, h = output_region
+            pyautogui.click(l + w // 2, t + h // 2)
             time.sleep(0.05)
         else:
-            raise RuntimeError(
-                "No way to focus transcript. Set IDE_FOCUS_TRANSCRIPT_HOTKEY or IDE_OUTPUT_IMAGE or IDE_OUTPUT_POS."
-            )
+            clicked = _click_by_image(pyautogui, IDE_OUTPUT_IMAGE, IDE_IMAGE_TIMEOUT_SEC)
+            if clicked:
+                time.sleep(0.05)
+            elif output_xy:
+                pyautogui.click(output_xy[0], output_xy[1])
+                time.sleep(0.05)
+            else:
+                raise RuntimeError(
+                    "No way to focus transcript. Set IDE_FOCUS_TRANSCRIPT_HOTKEY or IDE_OUTPUT_REGION or IDE_OUTPUT_IMAGE or IDE_OUTPUT_POS."
+                )
 
     if IDE_COPY_TRANSCRIPT_HOTKEY:
         pyautogui.hotkey(*_hotkey_from_spec(IDE_COPY_TRANSCRIPT_HOTKEY))
     else:
-        pyautogui.hotkey("ctrl", "a")
-        time.sleep(0.05)
-        pyautogui.hotkey("ctrl", "c")
+        if output_region:
+            # Avoid Ctrl+A: select a portion by dragging within the region, then copy.
+            l, t, w, h = output_region
+            # drag from near-bottom-right (latest messages) to near-top-left
+            start_x = l + int(w * 0.9)
+            start_y = t + int(h * 0.9)
+            end_x = l + int(w * 0.1)
+            end_y = t + int(h * 0.2)
+            pyautogui.moveTo(start_x, start_y)
+            time.sleep(0.02)
+            pyautogui.dragTo(end_x, end_y, duration=0.25, button="left")
+            time.sleep(0.05)
+            pyautogui.hotkey("ctrl", "c")
+        else:
+            pyautogui.hotkey("ctrl", "a")
+            time.sleep(0.05)
+            pyautogui.hotkey("ctrl", "c")
     copied = _clipboard_wait_for_change(sentinel, timeout_sec=3.0)
 
     answer = _extract_last_ai_answer(copied)
@@ -525,6 +571,8 @@ def ide_status() -> str:
     """
     input_xy = _parse_xy(IDE_INPUT_POS)
     output_xy = _parse_xy(IDE_OUTPUT_POS)
+    input_region = _parse_region(IDE_INPUT_REGION)
+    output_region = _parse_region(IDE_OUTPUT_REGION)
 
     input_img = _resolve_asset_path(IDE_INPUT_IMAGE) if IDE_INPUT_IMAGE else ""
     output_img = _resolve_asset_path(IDE_OUTPUT_IMAGE) if IDE_OUTPUT_IMAGE else ""
@@ -538,6 +586,8 @@ def ide_status() -> str:
     lines.append(f"IDE_COPY_TRANSCRIPT_HOTKEY: {IDE_COPY_TRANSCRIPT_HOTKEY!r}")
     lines.append(f"IDE_INPUT_POS: {IDE_INPUT_POS!r} -> {input_xy}")
     lines.append(f"IDE_OUTPUT_POS: {IDE_OUTPUT_POS!r} -> {output_xy}")
+    lines.append(f"IDE_INPUT_REGION: {IDE_INPUT_REGION!r} -> {input_region}")
+    lines.append(f"IDE_OUTPUT_REGION: {IDE_OUTPUT_REGION!r} -> {output_region}")
     lines.append(
         f"IDE_INPUT_IMAGE: {IDE_INPUT_IMAGE!r} -> {input_img} (exists={bool(input_img and Path(input_img).exists())})"
     )
@@ -557,8 +607,8 @@ def ide_status() -> str:
     except Exception:
         lines.append("opencv_available: False")
 
-    focus_ok = bool(IDE_CHAT_FOCUS_HOTKEY or IDE_INPUT_IMAGE or input_xy)
-    transcript_ok = bool(IDE_FOCUS_TRANSCRIPT_HOTKEY or IDE_OUTPUT_IMAGE or output_xy)
+    focus_ok = bool(IDE_CHAT_FOCUS_HOTKEY or input_region or IDE_INPUT_IMAGE or input_xy)
+    transcript_ok = bool(IDE_FOCUS_TRANSCRIPT_HOTKEY or output_region or IDE_OUTPUT_IMAGE or output_xy)
     lines.append(f"focus_input_configured: {focus_ok}")
     lines.append(f"focus_transcript_configured: {transcript_ok}")
 
@@ -585,9 +635,9 @@ def ide_status() -> str:
     if not IDE_WINDOW_TITLE_SUBSTR:
         lines.append("WARN: IDE_WINDOW_TITLE_SUBSTR is empty (IDE chat will fail).")
     if not focus_ok:
-        lines.append("WARN: No input focus method configured (set IDE_CHAT_FOCUS_HOTKEY or IDE_INPUT_IMAGE or IDE_INPUT_POS).")
+        lines.append("WARN: No input focus method configured (set IDE_CHAT_FOCUS_HOTKEY or IDE_INPUT_REGION or IDE_INPUT_IMAGE or IDE_INPUT_POS).")
     if not transcript_ok:
-        lines.append("WARN: No transcript focus method configured (set IDE_FOCUS_TRANSCRIPT_HOTKEY or IDE_OUTPUT_IMAGE or IDE_OUTPUT_POS).")
+        lines.append("WARN: No transcript focus method configured (set IDE_FOCUS_TRANSCRIPT_HOTKEY or IDE_OUTPUT_REGION or IDE_OUTPUT_IMAGE or IDE_OUTPUT_POS).")
 
     return "\n".join(lines)
 
@@ -680,6 +730,73 @@ def ide_debug_locate(user_id: str, kind: str) -> Dict[str, Optional[str]]:
     image_url = _storage_public_url_from_upload(object_path)
 
     return {"log": f"/ide debug locate {kind}: {status}\n{details}", "image_url": image_url}
+
+
+def _upsert_env_vars(env_path: Path, updates: Dict[str, str]) -> None:
+    """
+    Upsert KEY=VALUE lines into .env while preserving other lines/comments.
+    """
+    env_path = env_path.resolve()
+    lines: list[str] = []
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+
+    # Track which keys we've replaced.
+    replaced: set[str] = set()
+    out: list[str] = []
+    for line in lines:
+        raw = line
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            out.append(raw)
+            continue
+
+        key = s.split("=", 1)[0].strip()
+        if key in updates:
+            out.append(f"{key}={updates[key]}")
+            replaced.add(key)
+        else:
+            out.append(raw)
+
+    for k, v in updates.items():
+        if k not in replaced:
+            out.append(f"{k}={v}")
+
+    env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def ide_calibrate_regions() -> Dict[str, str]:
+    """
+    Interactive on-PC wizard:
+    - show a red draggable rectangle for input region
+    - then blue for output region
+    Writes IDE_INPUT_REGION / IDE_OUTPUT_REGION (and POS centers) to agent/.env.
+    """
+    from region_picker import pick_input_and_output
+
+    inp, out = pick_input_and_output()
+    if not inp or not out:
+        return {"log": "Canceled.", "image_url": ""}
+
+    updates: Dict[str, str] = {
+        "IDE_INPUT_REGION": inp.to_env(),
+        "IDE_OUTPUT_REGION": out.to_env(),
+        "IDE_INPUT_POS": f"{inp.left + inp.width // 2},{inp.top + inp.height // 2}",
+        "IDE_OUTPUT_POS": f"{out.left + out.width // 2},{out.top + out.height // 2}",
+    }
+    _upsert_env_vars(_DOTENV_PATH, updates)
+
+    return {
+        "log": (
+            "Saved regions to agent/.env:\n"
+            f"IDE_INPUT_REGION={updates['IDE_INPUT_REGION']}\n"
+            f"IDE_OUTPUT_REGION={updates['IDE_OUTPUT_REGION']}\n"
+            f"IDE_INPUT_POS={updates['IDE_INPUT_POS']}\n"
+            f"IDE_OUTPUT_POS={updates['IDE_OUTPUT_POS']}\n"
+            "Restart agent to apply."
+        ),
+        "image_url": "",
+    }
 
 
 def _learn_template_at_mouse(user_id: str, kind: str) -> Dict[str, str]:
@@ -835,6 +952,11 @@ def handle_command(payload: Dict[str, Any]) -> None:
 
         if command_text == "/ide status":
             update_command(command_id, "completed", response_log=ide_status())
+            return
+
+        if command_text == "/ide calibrate regions":
+            result = ide_calibrate_regions()
+            update_command(command_id, "completed", response_log=result["log"])
             return
 
         if command_text == "/ide debug screen":
