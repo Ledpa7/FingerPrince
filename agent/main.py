@@ -275,9 +275,11 @@ def _click_by_image(pyautogui_mod: Any, image_path: str, timeout_sec: float) -> 
         try:
             # confidence requires opencv; if missing, fall back to exact match.
             try:
-                pos = pyautogui_mod.locateCenterOnScreen(resolved, confidence=IDE_IMAGE_CONFIDENCE)
+                pos = pyautogui_mod.locateCenterOnScreen(
+                    resolved, confidence=IDE_IMAGE_CONFIDENCE, grayscale=True
+                )
             except Exception:
-                pos = pyautogui_mod.locateCenterOnScreen(resolved)
+                pos = pyautogui_mod.locateCenterOnScreen(resolved, grayscale=True)
 
             if pos:
                 pyautogui_mod.click(pos.x, pos.y)
@@ -524,6 +526,14 @@ def ide_status() -> str:
     lines.append(f"IDE_LEARN_COUNTDOWN_SEC: {IDE_LEARN_COUNTDOWN_SEC}")
     lines.append(f"IDE_RESPONSE_WAIT_SEC: {IDE_RESPONSE_WAIT_SEC}")
 
+    try:
+        import cv2  # type: ignore
+
+        _ = cv2.__version__
+        lines.append("opencv_available: True")
+    except Exception:
+        lines.append("opencv_available: False")
+
     focus_ok = bool(IDE_CHAT_FOCUS_HOTKEY or IDE_INPUT_IMAGE or input_xy)
     transcript_ok = bool(IDE_FOCUS_TRANSCRIPT_HOTKEY or IDE_OUTPUT_IMAGE or output_xy)
     lines.append(f"focus_input_configured: {focus_ok}")
@@ -609,9 +619,11 @@ def ide_debug_locate(user_id: str, kind: str) -> Dict[str, Optional[str]]:
     while time.time() < deadline and box is None:
         try:
             try:
-                box = pyautogui.locateOnScreen(template_path, confidence=IDE_IMAGE_CONFIDENCE)
+                box = pyautogui.locateOnScreen(
+                    template_path, confidence=IDE_IMAGE_CONFIDENCE, grayscale=True
+                )
             except Exception:
-                box = pyautogui.locateOnScreen(template_path)
+                box = pyautogui.locateOnScreen(template_path, grayscale=True)
         except Exception as e:
             last_err = e
         if box is None:
@@ -690,7 +702,37 @@ def _learn_template_at_mouse(user_id: str, kind: str) -> Dict[str, str]:
     else:
         image_url = str(public_url_result)
 
-    return {"path": str(out_path), "image_url": image_url}
+    # Also upload a full-screen debug image marking the captured region.
+    debug_object_path = f"{user_id}/debug/learn_{kind}_region_{now}.png"
+    try:
+        from PIL import ImageDraw
+
+        full = pyautogui.screenshot()
+        draw = ImageDraw.Draw(full)
+        draw.rectangle([left, top, left + w, top + h], outline=(255, 0, 0), width=8)
+        draw.rectangle([left - 2, top - 2, left + w + 2, top + h + 2], outline=(255, 255, 255), width=2)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_path = Path(tmpdir) / "learn_region.png"
+            full.save(local_path)
+            with open(local_path, "rb") as f:
+                supabase.storage.from_("screenshots").upload(
+                    debug_object_path,
+                    f,
+                    {"content-type": "image/png", "upsert": "true"},
+                )
+    except Exception as e:
+        logger.debug("Failed to upload learn debug image: %s", e)
+
+    debug_url = _storage_public_url_from_upload(debug_object_path)
+
+    return {
+        "path": str(out_path),
+        "image_url": image_url,
+        "debug_image_url": debug_url,
+        "mouse_pos": f"{int(p.x)},{int(p.y)}",
+        "region": f"{left},{top},{w},{h}",
+    }
 
 
 def handle_command(payload: Dict[str, Any]) -> None:
@@ -743,9 +785,12 @@ def handle_command(payload: Dict[str, Any]) -> None:
                 "completed",
                 response_log=(
                     f"Saved input template: {learned['path']}\n"
+                    f"mouse_pos={learned.get('mouse_pos')}\n"
+                    f"region={learned.get('region')}\n"
+                    f"template_url={learned.get('image_url')}\n"
                     "Set IDE_INPUT_IMAGE=assets\\ide_input_template.png"
                 ),
-                image_url=learned.get("image_url") or None,
+                image_url=learned.get("debug_image_url") or learned.get("image_url") or None,
             )
             return
 
@@ -756,9 +801,12 @@ def handle_command(payload: Dict[str, Any]) -> None:
                 "completed",
                 response_log=(
                     f"Saved output template: {learned['path']}\n"
+                    f"mouse_pos={learned.get('mouse_pos')}\n"
+                    f"region={learned.get('region')}\n"
+                    f"template_url={learned.get('image_url')}\n"
                     "Set IDE_OUTPUT_IMAGE=assets\\ide_output_template.png"
                 ),
-                image_url=learned.get("image_url") or None,
+                image_url=learned.get("debug_image_url") or learned.get("image_url") or None,
             )
             return
 
