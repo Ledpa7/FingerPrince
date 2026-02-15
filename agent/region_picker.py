@@ -72,6 +72,16 @@ class RegionPicker(tk.Tk):
         self.canvas.bind("<ButtonRelease-1>", self._on_up)
         self.bind("<Escape>", lambda _e: self._cancel())
 
+        # Force the overlay to appear and receive focus.
+        # On Windows, topmost can be flaky when another app just grabbed focus.
+        try:
+            self.update_idletasks()
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
+
     def _toolbar_bbox(self) -> Tuple[int, int, int, int]:
         # toolbar anchored near top-left of rect
         x = self.rect.left
@@ -266,4 +276,3 @@ def pick_input_and_output() -> Tuple[Optional[Rect], Optional[Rect]]:
         return (None, None)
     out = pick_region("Select OUTPUT region", "#3b82f6")  # blue
     return (inp, out)
-
