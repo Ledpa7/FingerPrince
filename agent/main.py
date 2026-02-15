@@ -390,8 +390,25 @@ def ide_chat_via_gui(question: str) -> Dict[str, Optional[str]]:
             if not hwnd:
                 raise RuntimeError("Window handle not available.")
 
+            # Avoid changing window state unexpectedly.
+            # - SW_RESTORE on a maximized window will *unmaximize* to its "restored" size/position
+            #   (often looks like Win+Left snap). Preserve maximize when already zoomed.
+            SW_SHOW = 5
+            SW_SHOWMAXIMIZED = 3
             SW_RESTORE = 9
-            user32.ShowWindow(hwnd, SW_RESTORE)
+            try:
+                is_iconic = bool(user32.IsIconic(hwnd))
+                is_zoomed = bool(user32.IsZoomed(hwnd))
+            except Exception:
+                is_iconic = False
+                is_zoomed = False
+
+            if is_iconic:
+                user32.ShowWindow(hwnd, SW_RESTORE)
+            elif is_zoomed:
+                user32.ShowWindow(hwnd, SW_SHOWMAXIMIZED)
+            else:
+                user32.ShowWindow(hwnd, SW_SHOW)
 
             # Try to bring to foreground even if another thread owns focus.
             fg = user32.GetForegroundWindow()
@@ -409,9 +426,15 @@ def ide_chat_via_gui(question: str) -> Dict[str, Optional[str]]:
                 user32.SetFocus(hwnd)
         except Exception:
             # Fall back to pygetwindow if ctypes activation fails.
-            best_win.restore()
-            time.sleep(0.1)
-            best_win.activate()
+            try:
+                if getattr(best_win, "isMinimized", False):
+                    best_win.restore()
+                    time.sleep(0.1)
+                best_win.activate()
+            except Exception:
+                best_win.restore()
+                time.sleep(0.1)
+                best_win.activate()
 
     def _activate_window_with_retries(best_win: Any, attempts: int = 6) -> None:
         last_exc: Optional[Exception] = None
