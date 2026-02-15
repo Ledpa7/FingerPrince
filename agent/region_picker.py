@@ -293,6 +293,8 @@ class RegionWindowPicker(tk.Tk):
         self.configure(bg=color)
         self.resizable(True, True)
         self.geometry("640x260+120+120")
+        # Prevent shrinking so much that the OK/Cancel bar becomes unreachable.
+        self.minsize(360, 140)
 
         self.result: Optional[Rect] = None
 
@@ -315,6 +317,9 @@ class RegionWindowPicker(tk.Tk):
         btn_ok.pack(side="right", padx=6, pady=6)
 
         self.bind("<Escape>", lambda _e: self._cancel())
+        # Keyboard fallback in case buttons are obscured by a tiny size or other windows.
+        self.bind("<Return>", lambda _e: self._ok())
+        self.bind("<KP_Enter>", lambda _e: self._ok())
 
         try:
             self.update_idletasks()
