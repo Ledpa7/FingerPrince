@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import argparse
+from pathlib import Path
 import tkinter as tk
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 
 @dataclass
@@ -276,3 +278,71 @@ def pick_input_and_output() -> Tuple[Optional[Rect], Optional[Rect]]:
         return (None, None)
     out = pick_region("Select OUTPUT region", "#3b82f6")  # blue
     return (inp, out)
+
+
+def _upsert_env_vars(env_path: Path, updates: Dict[str, str]) -> None:
+    env_path = env_path.resolve()
+    lines: list[str] = []
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+
+    replaced: set[str] = set()
+    out: list[str] = []
+    for line in lines:
+        raw = line
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            out.append(raw)
+            continue
+
+        key = s.split("=", 1)[0].strip()
+        if key in updates:
+            out.append(f"{key}={updates[key]}")
+            replaced.add(key)
+        else:
+            out.append(raw)
+
+    for k, v in updates.items():
+        if k not in replaced:
+            out.append(f"{k}={v}")
+
+    env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def _save_regions_to_env(env_path: Path, inp: Optional[Rect], out: Optional[Rect]) -> None:
+    updates: Dict[str, str] = {}
+    if inp:
+        updates["IDE_INPUT_REGION"] = inp.to_env()
+        updates["IDE_INPUT_POS"] = f"{inp.left + inp.width // 2},{inp.top + inp.height // 2}"
+    if out:
+        updates["IDE_OUTPUT_REGION"] = out.to_env()
+        updates["IDE_OUTPUT_POS"] = f"{out.left + out.width // 2},{out.top + out.height // 2}"
+    if not updates:
+        return
+    _upsert_env_vars(env_path, updates)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="ServerVibe region picker (writes IDE_*_REGION/POS into agent/.env)")
+    ap.add_argument("--env", default=str((Path(__file__).resolve().parent / ".env").resolve()))
+    ap.add_argument("--input", action="store_true", help="Pick only INPUT region (red)")
+    ap.add_argument("--output", action="store_true", help="Pick only OUTPUT region (blue)")
+    args = ap.parse_args()
+
+    env_path = Path(args.env)
+    if args.input and not args.output:
+        inp = pick_region("Select INPUT region", "#ef4444")
+        _save_regions_to_env(env_path, inp, None)
+        return 0
+    if args.output and not args.input:
+        out = pick_region("Select OUTPUT region", "#3b82f6")
+        _save_regions_to_env(env_path, None, out)
+        return 0
+
+    inp, out = pick_input_and_output()
+    _save_regions_to_env(env_path, inp, out)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
