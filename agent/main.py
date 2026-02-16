@@ -53,6 +53,8 @@ IDE_LEARN_TEMPLATE_W = int(os.getenv("IDE_LEARN_TEMPLATE_W", "320"))
 IDE_LEARN_TEMPLATE_H = int(os.getenv("IDE_LEARN_TEMPLATE_H", "160"))
 IDE_LEARN_COUNTDOWN_SEC = float(os.getenv("IDE_LEARN_COUNTDOWN_SEC", "5"))
 IDE_RESPONSE_WAIT_SEC = float(os.getenv("IDE_RESPONSE_WAIT_SEC", "15"))
+IDE_SEND_RETRY_COUNT = int(os.getenv("IDE_SEND_RETRY_COUNT", "1"))
+IDE_RETRY_WAIT_SEC = float(os.getenv("IDE_RETRY_WAIT_SEC", "4"))
 AI_ANSWER_MARKERS = os.getenv(
     "AI_ANSWER_MARKERS",
     "Assistant:,AI:,Codex:,Claude:,Cursor:,Antigravity:,답변:,Assistant",
@@ -479,84 +481,108 @@ def ide_chat_via_gui(question: str) -> Dict[str, Optional[str]]:
         pyautogui.hotkey(*_hotkey_from_spec(IDE_OPEN_CHAT_HOTKEY))
         time.sleep(0.1)
 
-    # Always paste (pyautogui typewrite can't handle Korean reliably).
-    pyperclip.copy(question)
+    def _focus_input() -> None:
+        # Focus input box: prefer hotkey -> region -> image -> coordinates.
+        if IDE_CHAT_FOCUS_HOTKEY:
+            pyautogui.hotkey(*_hotkey_from_spec(IDE_CHAT_FOCUS_HOTKEY))
+            time.sleep(0.05)
+            return
 
-    # Focus input box: prefer hotkey -> image -> coordinates.
-    if IDE_CHAT_FOCUS_HOTKEY:
-        pyautogui.hotkey(*_hotkey_from_spec(IDE_CHAT_FOCUS_HOTKEY))
-        time.sleep(0.05)
-    else:
         if input_region:
             l, t, w, h = input_region
             pyautogui.click(l + w // 2, t + h // 2)
             time.sleep(0.05)
+            return
+
+        clicked = _click_by_image(pyautogui, IDE_INPUT_IMAGE, IDE_IMAGE_TIMEOUT_SEC)
+        if clicked:
+            time.sleep(0.05)
+            return
+
+        if input_xy:
+            pyautogui.click(input_xy[0], input_xy[1])
+            time.sleep(0.05)
+            return
+
+        raise RuntimeError(
+            "No way to focus input. Set IDE_CHAT_FOCUS_HOTKEY or IDE_INPUT_REGION or IDE_INPUT_IMAGE or IDE_INPUT_POS."
+        )
+
+    def _copy_transcript_text() -> str:
+        # Copy transcript/log area.
+        sentinel = f"__server_vibe_clip_sentinel_{time.time_ns()}__"
+        pyperclip.copy(sentinel)
+
+        # Focus transcript: hotkey -> region -> image -> coordinates.
+        if IDE_FOCUS_TRANSCRIPT_HOTKEY:
+            pyautogui.hotkey(*_hotkey_from_spec(IDE_FOCUS_TRANSCRIPT_HOTKEY))
+            time.sleep(0.05)
         else:
-            clicked = _click_by_image(pyautogui, IDE_INPUT_IMAGE, IDE_IMAGE_TIMEOUT_SEC)
-            if clicked:
-                time.sleep(0.05)
-            elif input_xy:
-                pyautogui.click(input_xy[0], input_xy[1])
+            if output_region:
+                l, t, w, h = output_region
+                pyautogui.click(l + w // 2, t + h // 2)
                 time.sleep(0.05)
             else:
-                raise RuntimeError(
-                    "No way to focus input. Set IDE_CHAT_FOCUS_HOTKEY or IDE_INPUT_REGION or IDE_INPUT_IMAGE or IDE_INPUT_POS."
-                )
+                clicked = _click_by_image(pyautogui, IDE_OUTPUT_IMAGE, IDE_IMAGE_TIMEOUT_SEC)
+                if clicked:
+                    time.sleep(0.05)
+                elif output_xy:
+                    pyautogui.click(output_xy[0], output_xy[1])
+                    time.sleep(0.05)
+                else:
+                    raise RuntimeError(
+                        "No way to focus transcript. Set IDE_FOCUS_TRANSCRIPT_HOTKEY or IDE_OUTPUT_REGION or IDE_OUTPUT_IMAGE or IDE_OUTPUT_POS."
+                    )
 
+        if IDE_COPY_TRANSCRIPT_HOTKEY:
+            pyautogui.hotkey(*_hotkey_from_spec(IDE_COPY_TRANSCRIPT_HOTKEY))
+        else:
+            if output_region:
+                # Avoid Ctrl+A: select a portion by dragging within the region, then copy.
+                l, t, w, h = output_region
+                # drag from near-bottom-right (latest messages) to near-top-left
+                start_x = l + int(w * 0.9)
+                start_y = t + int(h * 0.9)
+                end_x = l + int(w * 0.1)
+                end_y = t + int(h * 0.2)
+                pyautogui.moveTo(start_x, start_y)
+                time.sleep(0.02)
+                pyautogui.dragTo(end_x, end_y, duration=0.25, button="left")
+                time.sleep(0.05)
+                pyautogui.hotkey("ctrl", "c")
+            else:
+                pyautogui.hotkey("ctrl", "a")
+                time.sleep(0.05)
+                pyautogui.hotkey("ctrl", "c")
+
+        return _clipboard_wait_for_change(sentinel, timeout_sec=3.0)
+
+    # Always paste (pyautogui typewrite can't handle Korean reliably).
+    pyperclip.copy(question)
+    _focus_input()
     pyautogui.hotkey("ctrl", "v")
     time.sleep(0.05)
     pyautogui.press("enter")
 
-    time.sleep(max(0.0, IDE_RESPONSE_WAIT_SEC))
+    answer = ""
+    last_copied = ""
+    total_tries = max(1, 1 + IDE_SEND_RETRY_COUNT)
+    for attempt in range(total_tries):
+        wait_sec = IDE_RESPONSE_WAIT_SEC if attempt == 0 else IDE_RETRY_WAIT_SEC
+        time.sleep(max(0.0, wait_sec))
 
-    # Copy transcript/log area.
-    sentinel = f"__server_vibe_clip_sentinel_{time.time_ns()}__"
-    pyperclip.copy(sentinel)
+        last_copied = _copy_transcript_text()
+        answer = _extract_last_ai_answer(last_copied)
 
-    # Focus transcript: hotkey -> region -> image -> coordinates.
-    if IDE_FOCUS_TRANSCRIPT_HOTKEY:
-        pyautogui.hotkey(*_hotkey_from_spec(IDE_FOCUS_TRANSCRIPT_HOTKEY))
-        time.sleep(0.05)
-    else:
-        if output_region:
-            l, t, w, h = output_region
-            pyautogui.click(l + w // 2, t + h // 2)
-            time.sleep(0.05)
-        else:
-            clicked = _click_by_image(pyautogui, IDE_OUTPUT_IMAGE, IDE_IMAGE_TIMEOUT_SEC)
-            if clicked:
-                time.sleep(0.05)
-            elif output_xy:
-                pyautogui.click(output_xy[0], output_xy[1])
-                time.sleep(0.05)
-            else:
-                raise RuntimeError(
-                    "No way to focus transcript. Set IDE_FOCUS_TRANSCRIPT_HOTKEY or IDE_OUTPUT_REGION or IDE_OUTPUT_IMAGE or IDE_OUTPUT_POS."
-                )
+        # Treat this as success if we extracted non-trivial text.
+        if answer and answer != "(no answer extracted)" and len(answer.strip()) >= 4:
+            break
 
-    if IDE_COPY_TRANSCRIPT_HOTKEY:
-        pyautogui.hotkey(*_hotkey_from_spec(IDE_COPY_TRANSCRIPT_HOTKEY))
-    else:
-        if output_region:
-            # Avoid Ctrl+A: select a portion by dragging within the region, then copy.
-            l, t, w, h = output_region
-            # drag from near-bottom-right (latest messages) to near-top-left
-            start_x = l + int(w * 0.9)
-            start_y = t + int(h * 0.9)
-            end_x = l + int(w * 0.1)
-            end_y = t + int(h * 0.2)
-            pyautogui.moveTo(start_x, start_y)
-            time.sleep(0.02)
-            pyautogui.dragTo(end_x, end_y, duration=0.25, button="left")
-            time.sleep(0.05)
-            pyautogui.hotkey("ctrl", "c")
-        else:
-            pyautogui.hotkey("ctrl", "a")
-            time.sleep(0.05)
-            pyautogui.hotkey("ctrl", "c")
-    copied = _clipboard_wait_for_change(sentinel, timeout_sec=3.0)
+        if attempt < total_tries - 1:
+            # Retry by focusing input and pressing Enter once more.
+            _focus_input()
+            pyautogui.press("enter")
 
-    answer = _extract_last_ai_answer(copied)
     if not answer:
         answer = "(no answer extracted)"
 
@@ -598,6 +624,8 @@ def ide_status() -> str:
     lines.append(f"IDE_IMAGE_CONFIDENCE: {IDE_IMAGE_CONFIDENCE}")
     lines.append(f"IDE_LEARN_COUNTDOWN_SEC: {IDE_LEARN_COUNTDOWN_SEC}")
     lines.append(f"IDE_RESPONSE_WAIT_SEC: {IDE_RESPONSE_WAIT_SEC}")
+    lines.append(f"IDE_SEND_RETRY_COUNT: {IDE_SEND_RETRY_COUNT}")
+    lines.append(f"IDE_RETRY_WAIT_SEC: {IDE_RETRY_WAIT_SEC}")
 
     try:
         import cv2  # type: ignore
