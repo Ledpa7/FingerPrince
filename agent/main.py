@@ -1,6 +1,7 @@
 import logging
 import os
 import platform
+import re
 import shlex
 import socket
 import tempfile
@@ -327,19 +328,35 @@ def _clipboard_wait_for_change(old: str, timeout_sec: float = 3.0) -> str:
     return pyperclip.paste() or ""
 
 
-def _extract_last_ai_answer(full_text: str) -> str:
+def _extract_last_ai_answer(full_text: str, question: str = "") -> str:
     text = (full_text or "").replace("\r\n", "\n").strip()
     if not text:
         return ""
 
     markers = [m.strip() for m in AI_ANSWER_MARKERS.split(",") if m.strip()]
     lowered = text.lower()
+    search_start = 0
+
+    # Prefer extracting content after the latest user question anchor.
+    q = (question or "").strip()
+    if q:
+        q_low = q.lower()
+        q_idx = lowered.rfind(q_low)
+        if q_idx >= 0:
+            search_start = q_idx + len(q_low)
+        else:
+            # Fuzzy fallback: find by shortened anchor if exact text differs slightly.
+            anchor = q_low[: min(32, len(q_low))].strip()
+            if anchor:
+                q_idx = lowered.rfind(anchor)
+                if q_idx >= 0:
+                    search_start = q_idx + len(anchor)
 
     # Find the last marker occurrence (case-insensitive).
     best_idx = -1
     best_marker = ""
     for m in markers:
-        idx = lowered.rfind(m.lower())
+        idx = lowered.rfind(m.lower(), search_start)
         if idx > best_idx:
             best_idx = idx
             best_marker = m
@@ -347,7 +364,24 @@ def _extract_last_ai_answer(full_text: str) -> str:
     if best_idx >= 0:
         # Return everything after the marker on that line.
         cut = text[best_idx + len(best_marker) :].lstrip()
-        return cut.strip()
+    else:
+        # If no assistant marker found after question anchor, fallback to text after anchor.
+        cut = text[search_start:] if search_start > 0 else text
+
+    cut = cut.strip()
+    if not cut:
+        return ""
+
+    # Stop when a new user turn starts (if present in copied block).
+    user_turn_re = re.compile(r"(?im)^\s*(User:|You:|Me:|나:|사용자:)\s*")
+    m = user_turn_re.search(cut)
+    if m and m.start() > 0:
+        cut = cut[: m.start()].rstrip()
+
+    # Remove accidental leading punctuation after marker.
+    cut = cut.lstrip(":- \n\t")
+    if cut:
+        return cut
 
     # Fallback: return the last ~120 lines (keeps UI usable).
     lines = text.split("\n")
@@ -572,7 +606,7 @@ def ide_chat_via_gui(question: str) -> Dict[str, Optional[str]]:
         time.sleep(max(0.0, wait_sec))
 
         last_copied = _copy_transcript_text()
-        answer = _extract_last_ai_answer(last_copied)
+        answer = _extract_last_ai_answer(last_copied, question=question)
 
         # Treat this as success if we extracted non-trivial text.
         if answer and answer != "(no answer extracted)" and len(answer.strip()) >= 4:
