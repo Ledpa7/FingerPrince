@@ -591,12 +591,26 @@ def ide_chat_via_gui(question: str) -> Dict[str, Optional[str]]:
 
         return _clipboard_wait_for_change(sentinel, timeout_sec=3.0)
 
+    def _question_anchor_present(copied_text: str, q: str) -> bool:
+        qq = (q or "").strip().lower()
+        if not qq:
+            return True
+        body = (copied_text or "").lower()
+        if qq in body:
+            return True
+        # Fuzzy anchor (first N chars) for minor formatting differences.
+        anchor = qq[: min(24, len(qq))].strip()
+        return bool(anchor and anchor in body)
+
+    def _send_question_once(q: str) -> None:
+        pyperclip.copy(q)
+        _focus_input()
+        pyautogui.hotkey("ctrl", "v")
+        time.sleep(0.05)
+        pyautogui.press("enter")
+
     # Always paste (pyautogui typewrite can't handle Korean reliably).
-    pyperclip.copy(question)
-    _focus_input()
-    pyautogui.hotkey("ctrl", "v")
-    time.sleep(0.05)
-    pyautogui.press("enter")
+    _send_question_once(question)
 
     answer = ""
     last_copied = ""
@@ -606,19 +620,26 @@ def ide_chat_via_gui(question: str) -> Dict[str, Optional[str]]:
         time.sleep(max(0.0, wait_sec))
 
         last_copied = _copy_transcript_text()
-        answer = _extract_last_ai_answer(last_copied, question=question)
+        anchor_ok = _question_anchor_present(last_copied, question)
+        if not anchor_ok:
+            # We likely copied old transcript without our new question; force resend.
+            answer = ""
+        else:
+            answer = _extract_last_ai_answer(last_copied, question=question)
 
         # Treat this as success if we extracted non-trivial text.
         if answer and answer != "(no answer extracted)" and len(answer.strip()) >= 4:
             break
 
         if attempt < total_tries - 1:
-            # Retry by focusing input and pressing Enter once more.
-            _focus_input()
-            pyautogui.press("enter")
+            # Retry by re-pasting and sending the question again.
+            _send_question_once(question)
 
     if not answer:
-        answer = "(no answer extracted)"
+        answer = (
+            "(no answer extracted; question may not have been submitted to IDE transcript. "
+            "Try widening IDE_OUTPUT_REGION or increasing IDE_RESPONSE_WAIT_SEC.)"
+        )
 
     return {"log": answer, "image_url": None}
 
