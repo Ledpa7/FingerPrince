@@ -56,6 +56,8 @@ IDE_LEARN_COUNTDOWN_SEC = float(os.getenv("IDE_LEARN_COUNTDOWN_SEC", "5"))
 IDE_RESPONSE_WAIT_SEC = float(os.getenv("IDE_RESPONSE_WAIT_SEC", "15"))
 IDE_SEND_RETRY_COUNT = int(os.getenv("IDE_SEND_RETRY_COUNT", "1"))
 IDE_RETRY_WAIT_SEC = float(os.getenv("IDE_RETRY_WAIT_SEC", "4"))
+# Submit key strategy (comma-separated): enter,ctrl+enter,alt+enter
+IDE_SUBMIT_KEYS = os.getenv("IDE_SUBMIT_KEYS", "enter,ctrl+enter").strip()
 AI_ANSWER_MARKERS = os.getenv(
     "AI_ANSWER_MARKERS",
     "Assistant:,AI:,Codex:,Claude:,Cursor:,Antigravity:,답변:,Assistant",
@@ -269,6 +271,11 @@ def _hotkey_from_spec(spec: str) -> Sequence[str]:
     # Example: "ctrl+l" -> ["ctrl", "l"], "ctrl+shift+p" -> ["ctrl","shift","p"]
     keys = [k.strip() for k in spec.split("+") if k.strip()]
     return keys if keys else ["ctrl", "l"]
+
+
+def _submit_specs() -> list[str]:
+    specs = [s.strip().lower() for s in IDE_SUBMIT_KEYS.split(",") if s.strip()]
+    return specs or ["enter", "ctrl+enter"]
 
 def _resolve_asset_path(p: str) -> str:
     """
@@ -596,21 +603,23 @@ def ide_chat_via_gui(question: str) -> Dict[str, Optional[str]]:
         if not qq:
             return True
         body = (copied_text or "").lower()
-        if qq in body:
-            return True
-        # Fuzzy anchor (first N chars) for minor formatting differences.
-        anchor = qq[: min(24, len(qq))].strip()
-        return bool(anchor and anchor in body)
+        # Strict: must contain full question text. Avoid fuzzy matching because
+        # short prompts like "안녕" can appear in stale transcript and cause false success.
+        return qq in body
 
-    def _send_question_once(q: str) -> None:
+    def _send_question_once(q: str, submit_spec: str) -> None:
         pyperclip.copy(q)
         _focus_input()
         pyautogui.hotkey("ctrl", "v")
         time.sleep(0.05)
-        pyautogui.press("enter")
+        if submit_spec == "enter":
+            pyautogui.press("enter")
+        else:
+            pyautogui.hotkey(*_hotkey_from_spec(submit_spec))
 
     # Always paste (pyautogui typewrite can't handle Korean reliably).
-    _send_question_once(question)
+    submit_specs = _submit_specs()
+    _send_question_once(question, submit_specs[0])
 
     answer = ""
     last_copied = ""
@@ -633,7 +642,8 @@ def ide_chat_via_gui(question: str) -> Dict[str, Optional[str]]:
 
         if attempt < total_tries - 1:
             # Retry by re-pasting and sending the question again.
-            _send_question_once(question)
+            submit_spec = submit_specs[min(attempt + 1, len(submit_specs) - 1)]
+            _send_question_once(question, submit_spec)
 
     if not answer:
         answer = (
@@ -681,6 +691,7 @@ def ide_status() -> str:
     lines.append(f"IDE_RESPONSE_WAIT_SEC: {IDE_RESPONSE_WAIT_SEC}")
     lines.append(f"IDE_SEND_RETRY_COUNT: {IDE_SEND_RETRY_COUNT}")
     lines.append(f"IDE_RETRY_WAIT_SEC: {IDE_RETRY_WAIT_SEC}")
+    lines.append(f"IDE_SUBMIT_KEYS: {IDE_SUBMIT_KEYS!r}")
 
     try:
         import cv2  # type: ignore
